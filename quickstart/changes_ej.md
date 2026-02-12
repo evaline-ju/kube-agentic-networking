@@ -1,0 +1,21 @@
+Changes from default quickstart:
+- Essentially deployed an a2a agent and an MCP tool, made sure firstly they could talk to each other in one namespace
+- Each of agent and tool have service and deployment but not service accounts (SA)
+    - Apply SA `oc apply -f a2a-agent-sa.yaml` from [a2a-agent-sa.yaml](a2a-agent-sa.yaml)
+    - Then update agent deployment with SA
+        - `oc set serviceaccount deployment <deployment-name> <service-account-name>`
+        - e.g. `oc set serviceaccount deployment weather-service a2a-agent-sa -n team1`
+- Steps 2.1, 2.2 as usual - make sure CRDs exist
+- SKIP 2.3 because agent and tool are already in a namespace
+- SKIP 2.4 since tool already exists
+- Step 3 Try to deploy the agentic networking controller - should be no change here
+- Need to update agent to use new Envoy proxy like the `ENVOY_SERVICE="envoy-proxy-3e11a0abd055.quickstart-ns.svc.cluster.local:10001" `—> `http://{envoy_service}/local/mcp` used in ADK agent
+    - Updated my agent with `oc set env deployment/weather-service MCP_URL=http://envoy-proxy-d1613fa0c9a9.team1.svc.cluster.local:10001/local/mcp -n team1`
+- Step 4 - change where the network policies point to ([`quickstart/policy/local-a2a.yaml`](quickstart/policy/local-a2a.yaml))
+    - Skip remote resource stuff for now - the tool is in the same namespace anyway
+    - Update everything for namespace being used e.g. `team1`
+    - Update backend (XBackend) and access policy (XAccessPolicy)'s service account and tool references
+        - Tool URL was http://weather-tool-mcp:8000/mcp and only tool was `get_weather`
+- Agent had to take in `x-k8s-sa-token`
+    - Needed to roll over agent itself
+- Comment out `get_weather` in XAccessPolicy to see if this is working -> 403 client errors and agent can't get weather but does hallucinate yay
