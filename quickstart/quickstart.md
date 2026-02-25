@@ -184,7 +184,7 @@ The agent uses an Envoy sidecar to establish mTLS-secured connections to the Gat
     # 2. Get the Gateway's ServiceAccount name to construct its SPIFFE identity
     export GATEWAY_SA=$(kubectl get sa -n quickstart-ns --no-headers -o custom-columns=":metadata.name" | grep "envoy-proxy-" | head -n 1)
     export GATEWAY_SPIFFE_ID="spiffe://cluster.local/ns/quickstart-ns/sa/${GATEWAY_SA}"
-    
+
     echo "Gateway Address: $GATEWAY_ADDRESS"
     echo "Gateway SPIFFE ID: $GATEWAY_SPIFFE_ID"
     ```
@@ -318,34 +318,64 @@ You can also integrate your own agent by following these steps:
 - Your agent deployment, service, and MCP tools are running
 - Your agent can communicate with MCP tool servers
 
-### Integration Steps
+### Step 8.1: Ensure your agent has a ServiceAccount
 
-1. **Ensure your agent has a ServiceAccount**:
-   - If your agent already has a `ServiceAccount`, note its name for use in access policies
-   - Otherwise, create one and update your deployment:
-     ```shell
-     kubectl create serviceaccount <agent-sa> -n <agent-namespace>
-     kubectl set serviceaccount deployment/<agent-deployment> <agent-sa> -n <agent-namespace>
-     ```
+The mTLS identity system issues SPIFFE certificates based on the pod's ServiceAccount. The resulting identity will be `spiffe://cluster.local/ns/<namespace>/sa/<service-account>`, which is used for RBAC policy matching.
 
-2. **Configure your agent to route through Envoy**:
-   - Find the Envoy proxy service name: `kubectl get svc -n <envoy-gateway-namespace> | grep envoy`
-   - Update your agent's configuration to use the Envoy proxy endpoint instead of connecting directly to tools
-   - Example using environment variable:
-     ```shell
-     kubectl set env deployment/<agent-deployment> \
-       TOOL_ENDPOINT=http://envoy-proxy-<hash>.<envoy-gateway-namespace>.svc.cluster.local:10001/local/mcp \
-       -n <agent-namespace>
-     ```
-   - The exact configuration method depends on how your agent connects to MCP tools
+If your agent already has a `ServiceAccount`, note its name. Otherwise, create one:
 
-4. **Ensure your agent sends the ServiceAccount token**:
-   - Your agent must send the service account token in a `x-k8s-sa-token` header when making MCP requests
-   - See [`quickstart/adk-agent/mcp_agent/agent.py`](adk-agent/mcp_agent/agent.py) for an example
+```shell
+kubectl create serviceaccount <agent-sa> -n <agent-namespace>
+kubectl set serviceaccount deployment/<agent-deployment> <agent-sa> -n <agent-namespace>
+```
 
-5. **Define or update access policies** (see [Step 4](#4-define-and-apply-network-policies) for details):
-   - Update `XBackend`, `XAccessPolicy`, and `HTTPRoute` resources to reference your agent's ServiceAccount and tool endpoints
-   - Apply the policies: `kubectl apply -f <policy-file>.yaml`
+### Step 8.2: Define or update access policies
+
+Update `XBackend`, `XAccessPolicy`, and `HTTPRoute` resources to reference your agent's ServiceAccount and tool endpoints (see [Step 4](#4-define-and-apply-network-policies) for details):
+
+```shell
+kubectl apply -f <policy-file>.yaml
+```
+
+### Step 8.3: Create the Envoy sidecar ConfigMap
+
+The Envoy sidecar needs a ConfigMap with its bootstrap and SDS configurations for mTLS. Use the template at [`quickstart/adk-agent/sidecar/sidecar-configs.yaml`](/quickstart/adk-agent/sidecar/sidecar-configs.yaml):
+
+1.  **Copy the template** and update `metadata.namespace` to your agent's namespace:
+
+    ```shell
+    cp quickstart/adk-agent/sidecar/sidecar-configs.yaml <your-sidecar-configs>.yaml
+    ```
+
+1.  **Discover the Gateway address and identity**, then **render and apply**:
+
+    ```shell
+    export GATEWAY_ADDRESS=$(kubectl get gateway agentic-net-gateway -n <gateway-namespace> -o jsonpath='{.status.addresses[0].value}')
+    export GATEWAY_SA=$(kubectl get sa -n <gateway-namespace> --no-headers -o custom-columns=":metadata.name" | grep "envoy-proxy-" | head -n 1)
+    export GATEWAY_SPIFFE_ID="spiffe://cluster.local/ns/<gateway-namespace>/sa/${GATEWAY_SA}"
+    envsubst < <your-sidecar-configs>.yaml | kubectl apply -f -
+    ```
+
+### Step 8.4: Add the Envoy sidecar to your agent deployment
+
+Using the [ADK agent deployment](/quickstart/adk-agent/deployment.yaml) as a reference, add the following to your agent's Deployment spec:
+
+1.  **A `proxy-init` init container** that redirects outbound port 10001 traffic to the local Envoy sidecar via iptables.
+
+1.  **An `envoy` sidecar container** with the `envoy-sidecar-configs` and `agent-identity-mtls` volumes. Add `--disable-hot-restart` to the Envoy args if the hot restart socket conflicts in your environment.
+
+### Step 8.5: Configure your agent to route through Envoy
+
+Update your agent's tool endpoint to use the local Envoy sidecar. Use **plain HTTP** (not HTTPS) — the sidecar handles mTLS to the Gateway transparently:
+
+```shell
+kubectl set env deployment/<agent-deployment> \
+  TOOL_ENDPOINT=http://127.0.0.1:10001/<route-path> \
+  -n <agent-namespace>
+```
+
+The exact configuration method depends on how your agent connects to MCP tools.
+
 
 ## 9. Clean Up
 
