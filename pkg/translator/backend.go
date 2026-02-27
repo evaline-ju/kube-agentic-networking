@@ -23,6 +23,7 @@ import (
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+	upstreamhttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -161,4 +162,34 @@ func buildK8sApiCluster() (*clusterv3.Cluster, error) {
 		},
 	}
 	return cluster, nil
+}
+
+// buildExtProcCluster creates the Envoy cluster for the prompt injection detection ext-proc gRPC service.
+// The service is expected to be deployed as "prompt-injection-filter" in the same namespace as the Gateway.
+func buildExtProcCluster(namespace string) (*clusterv3.Cluster, error) {
+	serviceFQDN := fmt.Sprintf("prompt-injection-filter.%s.svc.cluster.local", namespace)
+
+	httpOpts := &upstreamhttpv3.HttpProtocolOptions{
+		UpstreamProtocolOptions: &upstreamhttpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+			ExplicitHttpConfig: &upstreamhttpv3.HttpProtocolOptions_ExplicitHttpConfig{
+				ProtocolConfig: &upstreamhttpv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{
+					Http2ProtocolOptions: &corev3.Http2ProtocolOptions{},
+				},
+			},
+		},
+	}
+	httpOptsAny, err := anypb.New(httpOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal HttpProtocolOptions for ext-proc: %w", err)
+	}
+
+	return &clusterv3.Cluster{
+		Name:                 constants.ExtProcClusterName,
+		ConnectTimeout:       durationpb.New(defaultConnectTimeout),
+		ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STRICT_DNS},
+		LoadAssignment:       createClusterLoadAssignment(constants.ExtProcClusterName, serviceFQDN, 50051),
+		TypedExtensionProtocolOptions: map[string]*anypb.Any{
+			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": httpOptsAny,
+		},
+	}, nil
 }

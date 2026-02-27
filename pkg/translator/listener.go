@@ -18,9 +18,11 @@ package translator
 
 import (
 	"fmt"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
+	ext_procv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	mcpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/mcp/v3"
 	rbacv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/rbac/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
@@ -31,6 +33,7 @@ import (
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -264,7 +267,10 @@ func buildHTTPFilters() ([]*hcm.HttpFilter, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	extProcFilter, err := buildExtProcFilter()
+	if err != nil {
+		return nil, err
+	}
 	routerFilter, err := buildRouterFilter()
 	if err != nil {
 		return nil, err
@@ -272,10 +278,13 @@ func buildHTTPFilters() ([]*hcm.HttpFilter, error) {
 
 	return []*hcm.HttpFilter{
 		// IMPORTANT: Order matters here!
-		// RBAC filter must come before the router filter to enforce access control before routing.
-		// Router filter must come last to handle routing after all other filters have processed the request.
+		// MCP filter parses MCP protocol messages.
+		// RBAC filter enforces access control before routing.
+		// ext_proc sends request/response bodies to the prompt injection detection service.
+		// Router filter must come last.
 		mcpFilter,
 		rbacFilter,
+		extProcFilter,
 		routerFilter,
 	}, nil
 }
@@ -308,6 +317,40 @@ func buildRBACFilter() (*hcm.HttpFilter, error) {
 		Name: wellknown.HTTPRoleBasedAccessControl,
 		ConfigType: &hcm.HttpFilter_TypedConfig{
 			TypedConfig: rbacAny,
+		},
+	}, nil
+}
+
+func buildExtProcFilter() (*hcm.HttpFilter, error) {
+	extProcConfig := &ext_procv3.ExternalProcessor{
+		GrpcService: &corev3.GrpcService{
+			TargetSpecifier: &corev3.GrpcService_EnvoyGrpc_{
+				EnvoyGrpc: &corev3.GrpcService_EnvoyGrpc{
+					ClusterName: constants.ExtProcClusterName,
+				},
+			},
+			Timeout: durationpb.New(5 * time.Second),
+		},
+		ProcessingMode: &ext_procv3.ProcessingMode{
+			RequestHeaderMode:   ext_procv3.ProcessingMode_SEND,
+			ResponseHeaderMode:  ext_procv3.ProcessingMode_SEND,
+			RequestBodyMode:     ext_procv3.ProcessingMode_BUFFERED,
+			ResponseBodyMode:    ext_procv3.ProcessingMode_BUFFERED,
+			RequestTrailerMode:  ext_procv3.ProcessingMode_SKIP,
+			ResponseTrailerMode: ext_procv3.ProcessingMode_SKIP,
+		},
+		FailureModeAllow: false,
+	}
+	extProcAny, err := anypb.New(extProcConfig)
+	if err != nil {
+		klog.Errorf("Failed to marshal ext_proc config: %v", err)
+		return nil, err
+	}
+
+	return &hcm.HttpFilter{
+		Name: "envoy.filters.http.ext_proc",
+		ConfigType: &hcm.HttpFilter_TypedConfig{
+			TypedConfig: extProcAny,
 		},
 	}, nil
 }
