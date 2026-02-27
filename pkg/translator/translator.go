@@ -63,6 +63,7 @@ type Translator struct {
 	httprouteLister            gatewaylisters.HTTPRouteLister
 	accessPolicyLister         agenticlisters.XAccessPolicyLister
 	backendLister              agenticlisters.XBackendLister
+	guardrailPolicyLister      agenticlisters.XGuardrailPolicyLister
 }
 
 func New(
@@ -76,18 +77,20 @@ func New(
 	httpRouteLister gatewaylisters.HTTPRouteLister,
 	accessPolicyLister agenticlisters.XAccessPolicyLister,
 	backendLister agenticlisters.XBackendLister,
+	guardrailPolicyLister agenticlisters.XGuardrailPolicyLister,
 ) *Translator {
 	return &Translator{
-		agenticIdentityTrustDomain,
-		client,
-		gwClient,
-		namespaceLister,
-		serviceLister,
-		secretLister,
-		gatewayLister,
-		httpRouteLister,
-		accessPolicyLister,
-		backendLister,
+		agenticIdentityTrustDomain: agenticIdentityTrustDomain,
+		client:                     client,
+		gwClient:                   gwClient,
+		namespaceLister:            namespaceLister,
+		serviceLister:              serviceLister,
+		secretLister:               secretLister,
+		gatewayLister:              gatewayLister,
+		httprouteLister:            httpRouteLister,
+		accessPolicyLister:         accessPolicyLister,
+		backendLister:              backendLister,
+		guardrailPolicyLister:      guardrailPolicyLister,
 	}
 }
 
@@ -148,6 +151,16 @@ func (t *Translator) buildEnvoyResourcesForGateway(gateway *gatewayv1.Gateway) (
 	envoyRoutes := []envoyproxytypes.Resource{}
 	envoyClusters := make(map[string]envoyproxytypes.Resource)
 	allListenerStatuses := make(map[gatewayv1.SectionName]gatewayv1.ListenerStatus)
+
+	// Resolve ext-proc processors from GuardrailPolicy resources targeting backends on this gateway.
+	// This must happen before building filter chains so the ext_proc filters can be included.
+	allGatewayBackends := t.collectBackendsForGateway(gateway)
+	extProcessors, err := t.collectExtProcessors(allGatewayBackends)
+	if err != nil {
+		klog.Errorf("Failed to collect ext-proc processors for gateway %s/%s: %v", gateway.Namespace, gateway.Name, err)
+		// Continue without ext-proc if we can't resolve guardrail policies.
+		extProcessors = nil
+	}
 
 	// 3. Group Gateway listeners by port
 	listenersByPort := make(map[gatewayv1.PortNumber][]gatewayv1.Listener)
@@ -267,7 +280,7 @@ func (t *Translator) buildEnvoyResourcesForGateway(gateway *gatewayv1.Gateway) (
 			}
 
 			// 8. translate listener into a filter chain (HTTP connection manager that references route config 'route-<port>')
-			filterChain, err := t.translateListenerToFilterChain(listener, routeName)
+			filterChain, err := t.translateListenerToFilterChain(listener, routeName, extProcessors)
 			if err != nil {
 				meta.SetStatusCondition(&listenerStatus.Conditions, metav1.Condition{
 					Type:               string(gatewayv1.ListenerConditionProgrammed),
@@ -327,7 +340,7 @@ func (t *Translator) buildEnvoyResourcesForGateway(gateway *gatewayv1.Gateway) (
 			// For HTTPS, we create one filter chain per listener because they have unique
 			// SNI matches and TLS settings.
 			if listeners[0].Protocol == gatewayv1.HTTPProtocolType {
-				filterChain, _ := t.translateListenerToFilterChain(listeners[0], routeName)
+				filterChain, _ := t.translateListenerToFilterChain(listeners[0], routeName, extProcessors)
 				envoyListener.FilterChains = []*listenerv3.FilterChain{filterChain}
 			}
 			finalEnvoyListeners = append(finalEnvoyListeners, envoyListener)
@@ -346,11 +359,16 @@ func (t *Translator) buildEnvoyResourcesForGateway(gateway *gatewayv1.Gateway) (
 	}
 	clustersSlice = append(clustersSlice, k8sApiCluster)
 
-	extProcCluster, err := buildExtProcCluster(gateway.Namespace)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to build ext_proc cluster: %w", err)
+	// Build ext-proc clusters for each processor resolved from GuardrailPolicy resources.
+	for _, proc := range extProcessors {
+		clusterName := extProcClusterName(proc.Name)
+		fqdn := extProcServiceFQDN(proc.ServiceRef)
+		extProcCluster, err := buildExtProcCluster(clusterName, fqdn, uint32(proc.ServiceRef.Port))
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to build ext_proc cluster %s: %w", clusterName, err)
+		}
+		clustersSlice = append(clustersSlice, extProcCluster)
 	}
-	clustersSlice = append(clustersSlice, extProcCluster)
 
 	orderedStatuses := make([]gatewayv1.ListenerStatus, len(gateway.Spec.Listeners))
 	for i, listener := range gateway.Spec.Listeners {

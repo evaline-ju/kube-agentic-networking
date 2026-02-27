@@ -78,6 +78,9 @@ type agenticNetResources struct {
 
 	accessPolicyLister agenticlisters.XAccessPolicyLister
 	accessPolicySynced cache.InformerSynced
+
+	guardrailPolicyLister agenticlisters.XGuardrailPolicyLister
+	guardrailPolicySynced cache.InformerSynced
 }
 
 // Controller is the controller implementation for Gateway resources
@@ -110,6 +113,7 @@ func New(
 	httprouteInformer gatewayinformers.HTTPRouteInformer,
 	backendInformer agenticinformers.XBackendInformer,
 	accessPolicyInformer agenticinformers.XAccessPolicyInformer,
+	guardrailPolicyInformer agenticinformers.XGuardrailPolicyInformer,
 ) (*Controller, error) {
 	c := &Controller{
 		core: coreResources{
@@ -131,11 +135,13 @@ func New(
 			httprouteSynced:    httprouteInformer.Informer().HasSynced,
 		},
 		agentic: agenticNetResources{
-			client:             agenticClientSet,
-			backendLister:      backendInformer.Lister(),
-			backendSynced:      backendInformer.Informer().HasSynced,
-			accessPolicyLister: accessPolicyInformer.Lister(),
-			accessPolicySynced: accessPolicyInformer.Informer().HasSynced,
+			client:                agenticClientSet,
+			backendLister:         backendInformer.Lister(),
+			backendSynced:         backendInformer.Informer().HasSynced,
+			accessPolicyLister:    accessPolicyInformer.Lister(),
+			accessPolicySynced:    accessPolicyInformer.Informer().HasSynced,
+			guardrailPolicyLister: guardrailPolicyInformer.Lister(),
+			guardrailPolicySynced: guardrailPolicyInformer.Informer().HasSynced,
 		},
 		agenticIdentityTrustDomain: agenticIdentityTrustDomain,
 		envoyImage:                 envoyImage,
@@ -157,6 +163,7 @@ func New(
 		httprouteInformer.Lister(),
 		accessPolicyInformer.Lister(),
 		backendInformer.Lister(),
+		guardrailPolicyInformer.Lister(),
 	)
 
 	// Setup event handlers for all relevant resources.
@@ -173,6 +180,9 @@ func New(
 		return nil, err
 	}
 	if err := c.setupAccessPolicyEventHandlers(accessPolicyInformer); err != nil {
+		return nil, err
+	}
+	if err := c.setupGuardrailPolicyEventHandlers(guardrailPolicyInformer); err != nil {
 		return nil, err
 	}
 	if err := c.setupServiceEventHandlers(serviceInformer); err != nil {
@@ -204,7 +214,8 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 		c.gateway.gatewaySynced,
 		c.gateway.httprouteSynced,
 		c.agentic.backendSynced,
-		c.agentic.accessPolicySynced); !ok {
+		c.agentic.accessPolicySynced,
+		c.agentic.guardrailPolicySynced); !ok {
 		return errors.New("failed to wait for caches to sync")
 	}
 

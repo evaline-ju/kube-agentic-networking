@@ -39,6 +39,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	agenticv0alpha0 "sigs.k8s.io/kube-agentic-networking/api/v0alpha0"
 	"sigs.k8s.io/kube-agentic-networking/pkg/constants"
 )
 
@@ -143,13 +144,13 @@ func (t *Translator) validateListeners(gateway *gatewayv1.Gateway) map[gatewayv1
 	return listenerConditions
 }
 
-func (t *Translator) translateListenerToFilterChain(lis gatewayv1.Listener, routeName string) (*listener.FilterChain, error) {
+func (t *Translator) translateListenerToFilterChain(lis gatewayv1.Listener, routeName string, extProcessors []agenticv0alpha0.ExtProcessorRef) (*listener.FilterChain, error) {
 	var filterChain *listener.FilterChain
 	var err error
 
 	switch lis.Protocol {
 	case gatewayv1.HTTPProtocolType, gatewayv1.HTTPSProtocolType:
-		filterChain, err = buildHTTPFilterChain(lis, routeName)
+		filterChain, err = buildHTTPFilterChain(lis, routeName, extProcessors)
 	case gatewayv1.TCPProtocolType, gatewayv1.TLSProtocolType:
 		filterChain, err = buildTCPFilterChain(lis)
 	case gatewayv1.UDPProtocolType:
@@ -180,8 +181,8 @@ func (t *Translator) translateListenerToFilterChain(lis gatewayv1.Listener, rout
 	return filterChain, nil
 }
 
-func buildHTTPFilterChain(lis gatewayv1.Listener, routeName string) (*listener.FilterChain, error) {
-	httpFilters, err := buildHTTPFilters()
+func buildHTTPFilterChain(lis gatewayv1.Listener, routeName string, extProcessors []agenticv0alpha0.ExtProcessorRef) (*listener.FilterChain, error) {
+	httpFilters, err := buildHTTPFilters(extProcessors)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +259,7 @@ func buildUDPFilterChain(lis gatewayv1.Listener) (*listener.FilterChain, error) 
 	}, nil
 }
 
-func buildHTTPFilters() ([]*hcm.HttpFilter, error) {
+func buildHTTPFilters(extProcessors []agenticv0alpha0.ExtProcessorRef) ([]*hcm.HttpFilter, error) {
 	mcpFilter, err := buildMCPFilter()
 	if err != nil {
 		return nil, err
@@ -267,26 +268,33 @@ func buildHTTPFilters() ([]*hcm.HttpFilter, error) {
 	if err != nil {
 		return nil, err
 	}
-	extProcFilter, err := buildExtProcFilter()
-	if err != nil {
-		return nil, err
-	}
 	routerFilter, err := buildRouterFilter()
 	if err != nil {
 		return nil, err
 	}
 
-	return []*hcm.HttpFilter{
+	filters := []*hcm.HttpFilter{
 		// IMPORTANT: Order matters here!
 		// MCP filter parses MCP protocol messages.
 		// RBAC filter enforces access control before routing.
-		// ext_proc sends request/response bodies to the prompt injection detection service.
-		// Router filter must come last.
 		mcpFilter,
 		rbacFilter,
-		extProcFilter,
-		routerFilter,
-	}, nil
+	}
+
+	// ext_proc filters are inserted after RBAC and before the router.
+	// One filter is created per ExtProcessorRef declared in GuardrailPolicy resources.
+	for _, proc := range extProcessors {
+		clusterName := extProcClusterName(proc.Name)
+		extProcFilter, err := buildExtProcFilter(proc, clusterName)
+		if err != nil {
+			return nil, err
+		}
+		filters = append(filters, extProcFilter)
+	}
+
+	// Router filter must come last.
+	filters = append(filters, routerFilter)
+	return filters, nil
 }
 
 func buildMCPFilter() (*hcm.HttpFilter, error) {
@@ -321,38 +329,90 @@ func buildRBACFilter() (*hcm.HttpFilter, error) {
 	}, nil
 }
 
-func buildExtProcFilter() (*hcm.HttpFilter, error) {
+const defaultExtProcTimeout = 5 * time.Second
+
+// buildExtProcFilter creates an Envoy ext_proc HTTP filter from a GuardrailPolicy ExtProcessorRef.
+func buildExtProcFilter(proc agenticv0alpha0.ExtProcessorRef, clusterName string) (*hcm.HttpFilter, error) {
+	timeout := defaultExtProcTimeout
+	if proc.Timeout != nil {
+		timeout = proc.Timeout.Duration
+	}
+
 	extProcConfig := &ext_procv3.ExternalProcessor{
 		GrpcService: &corev3.GrpcService{
 			TargetSpecifier: &corev3.GrpcService_EnvoyGrpc_{
 				EnvoyGrpc: &corev3.GrpcService_EnvoyGrpc{
-					ClusterName: constants.ExtProcClusterName,
+					ClusterName: clusterName,
 				},
 			},
-			Timeout: durationpb.New(5 * time.Second),
+			Timeout: durationpb.New(timeout),
 		},
-		ProcessingMode: &ext_procv3.ProcessingMode{
-			RequestHeaderMode:   ext_procv3.ProcessingMode_SEND,
-			ResponseHeaderMode:  ext_procv3.ProcessingMode_SEND,
-			RequestBodyMode:     ext_procv3.ProcessingMode_BUFFERED,
-			ResponseBodyMode:    ext_procv3.ProcessingMode_BUFFERED,
-			RequestTrailerMode:  ext_procv3.ProcessingMode_SKIP,
-			ResponseTrailerMode: ext_procv3.ProcessingMode_SKIP,
-		},
-		FailureModeAllow: false,
+		ProcessingMode:   toEnvoyProcessingMode(proc.ProcessingMode),
+		FailureModeAllow: proc.FailureModeAllow,
 	}
 	extProcAny, err := anypb.New(extProcConfig)
 	if err != nil {
-		klog.Errorf("Failed to marshal ext_proc config: %v", err)
+		klog.Errorf("Failed to marshal ext_proc config for %s: %v", proc.Name, err)
 		return nil, err
 	}
 
 	return &hcm.HttpFilter{
-		Name: "envoy.filters.http.ext_proc",
+		Name: fmt.Sprintf("envoy.filters.http.ext_proc/%s", proc.Name),
 		ConfigType: &hcm.HttpFilter_TypedConfig{
 			TypedConfig: extProcAny,
 		},
 	}, nil
+}
+
+// toEnvoyProcessingMode converts the CRD ProcessingModeSpec to the Envoy ext_proc ProcessingMode.
+// When the spec is nil, defaults are applied: headers SEND, bodies BUFFERED, trailers SKIP.
+func toEnvoyProcessingMode(spec *agenticv0alpha0.ProcessingModeSpec) *ext_procv3.ProcessingMode {
+	mode := &ext_procv3.ProcessingMode{
+		// Defaults
+		RequestHeaderMode:   ext_procv3.ProcessingMode_SEND,
+		ResponseHeaderMode:  ext_procv3.ProcessingMode_SEND,
+		RequestBodyMode:     ext_procv3.ProcessingMode_BUFFERED,
+		ResponseBodyMode:    ext_procv3.ProcessingMode_BUFFERED,
+		RequestTrailerMode:  ext_procv3.ProcessingMode_SKIP,
+		ResponseTrailerMode: ext_procv3.ProcessingMode_SKIP,
+	}
+	if spec == nil {
+		return mode
+	}
+
+	if spec.RequestHeaders != nil {
+		mode.RequestHeaderMode = toEnvoyHeaderMode(*spec.RequestHeaders)
+	}
+	if spec.ResponseHeaders != nil {
+		mode.ResponseHeaderMode = toEnvoyHeaderMode(*spec.ResponseHeaders)
+	}
+	if spec.RequestBody != nil {
+		mode.RequestBodyMode = toEnvoyBodyMode(*spec.RequestBody)
+	}
+	if spec.ResponseBody != nil {
+		mode.ResponseBodyMode = toEnvoyBodyMode(*spec.ResponseBody)
+	}
+	return mode
+}
+
+func toEnvoyHeaderMode(m agenticv0alpha0.HeaderProcessingMode) ext_procv3.ProcessingMode_HeaderSendMode {
+	switch m {
+	case agenticv0alpha0.HeaderProcessingModeSkip:
+		return ext_procv3.ProcessingMode_SKIP
+	default:
+		return ext_procv3.ProcessingMode_SEND
+	}
+}
+
+func toEnvoyBodyMode(m agenticv0alpha0.BodyProcessingMode) ext_procv3.ProcessingMode_BodySendMode {
+	switch m {
+	case agenticv0alpha0.BodyProcessingModeStreamed:
+		return ext_procv3.ProcessingMode_STREAMED
+	case agenticv0alpha0.BodyProcessingModeSkip:
+		return ext_procv3.ProcessingMode_NONE
+	default:
+		return ext_procv3.ProcessingMode_BUFFERED
+	}
 }
 
 func buildRouterFilter() (*hcm.HttpFilter, error) {

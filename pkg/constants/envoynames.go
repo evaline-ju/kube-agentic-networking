@@ -35,8 +35,9 @@ const (
 	ClusterNameFormat = "%s-%s"
 	// K8sAPIClusterName is the name of the cluster that points to the Kubernetes API server.
 	K8sAPIClusterName = "kubernetes_api_cluster"
-	// ExtProcClusterName is the Envoy cluster name for the prompt injection ext-proc gRPC service.
-	ExtProcClusterName = "prompt_injection_filter"
+	// ExtProcClusterNameFormat is the format string for Envoy ext_proc cluster names,
+	// becoming `extproc-<processor-name>`.
+	ExtProcClusterNameFormat = "extproc-%s"
 
 	// EnvoyBootstrapMountPath is the path where the Envoy bootstrap configuration is mounted.
 	EnvoyBootstrapMountPath = "/etc/envoy/bootstrap"

@@ -116,7 +116,8 @@ func main() {
 		sharedGwInformers.Gateway().V1().Gateways(),
 		sharedGwInformers.Gateway().V1().HTTPRoutes(),
 		sharedAgenticInformers.Agentic().V0alpha0().XBackends(),
-		sharedAgenticInformers.Agentic().V0alpha0().XAccessPolicies())
+		sharedAgenticInformers.Agentic().V0alpha0().XAccessPolicies(),
+		sharedAgenticInformers.Agentic().V0alpha0().XGuardrailPolicies())
 	if err != nil {
 		klog.ErrorS(err, "Error while creating agentic networking controller")
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)

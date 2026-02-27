@@ -154,7 +154,7 @@ func TestTranslateGatewayToXDS_Full(t *testing.T) {
 			}{
 				listenerNames: []string{"listener-10001"},
 				routeNames:    []string{"route-10001"},
-				clusterNames:  []string{"quickstart-ns-local-mcp-backend", "kubernetes_api_cluster", "prompt_injection_filter"},
+				clusterNames:  []string{"quickstart-ns-local-mcp-backend", "kubernetes_api_cluster"},
 				spiffeID:      "spiffe://cluster.local/ns/quickstart-ns/sa/adk-agent-sa",
 			},
 		},
@@ -183,6 +183,7 @@ func TestTranslateGatewayToXDS_Full(t *testing.T) {
 				gwInformerFactory.Gateway().V1().HTTPRoutes().Lister(),
 				agenticInformerFactory.Agentic().V0alpha0().XAccessPolicies().Lister(),
 				agenticInformerFactory.Agentic().V0alpha0().XBackends().Lister(),
+				agenticInformerFactory.Agentic().V0alpha0().XGuardrailPolicies().Lister(),
 			)
 
 			// Populate Informer caches

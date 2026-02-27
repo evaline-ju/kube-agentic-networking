@@ -164,11 +164,10 @@ func buildK8sApiCluster() (*clusterv3.Cluster, error) {
 	return cluster, nil
 }
 
-// buildExtProcCluster creates the Envoy cluster for the prompt injection detection ext-proc gRPC service.
-// The service is expected to be deployed as "prompt-injection-filter" in the same namespace as the Gateway.
-func buildExtProcCluster(namespace string) (*clusterv3.Cluster, error) {
-	serviceFQDN := fmt.Sprintf("prompt-injection-filter.%s.svc.cluster.local", namespace)
-
+// buildExtProcCluster creates an Envoy cluster for an ext_proc gRPC service.
+// The clusterName, serviceFQDN, and port are derived from the ExtProcessorRef
+// specified in a GuardrailPolicy.
+func buildExtProcCluster(clusterName, serviceFQDN string, port uint32) (*clusterv3.Cluster, error) {
 	httpOpts := &upstreamhttpv3.HttpProtocolOptions{
 		UpstreamProtocolOptions: &upstreamhttpv3.HttpProtocolOptions_ExplicitHttpConfig_{
 			ExplicitHttpConfig: &upstreamhttpv3.HttpProtocolOptions_ExplicitHttpConfig{
@@ -180,14 +179,14 @@ func buildExtProcCluster(namespace string) (*clusterv3.Cluster, error) {
 	}
 	httpOptsAny, err := anypb.New(httpOpts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal HttpProtocolOptions for ext-proc: %w", err)
+		return nil, fmt.Errorf("failed to marshal HttpProtocolOptions for ext-proc cluster %s: %w", clusterName, err)
 	}
 
 	return &clusterv3.Cluster{
-		Name:                 constants.ExtProcClusterName,
+		Name:                 clusterName,
 		ConnectTimeout:       durationpb.New(defaultConnectTimeout),
 		ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STRICT_DNS},
-		LoadAssignment:       createClusterLoadAssignment(constants.ExtProcClusterName, serviceFQDN, 50051),
+		LoadAssignment:       createClusterLoadAssignment(clusterName, serviceFQDN, port),
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
 			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": httpOptsAny,
 		},
