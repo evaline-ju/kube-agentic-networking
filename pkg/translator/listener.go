@@ -377,7 +377,7 @@ func (t *Translator) buildHTTPFilterChain(lis gatewayv1.Listener, routeName stri
 			},
 		},
 		HttpFilters: httpFilters,
-		Tracing:     buildTracingConfig(t.tracingSampleRate),
+		Tracing:     buildTracingConfig(t.resolveTracingForGateway(gateway)),
 	}
 	hcmAny, err := anypb.New(hcmConfig)
 	if err != nil {
@@ -440,23 +440,31 @@ func buildUDPFilterChain(lis gatewayv1.Listener) (*listener.FilterChain, error) 
 
 // buildTracingConfig creates tracing configuration with custom tags that expose
 // shadow RBAC metadata, caller identity, and derived security event attributes on gateway spans.
-func buildTracingConfig(sampleRate float64) *hcm.HttpConnectionManager_Tracing {
+// Policy-defined custom span attributes (XTelemetryPolicy tracing.attributes) are appended
+// to the implementation-provided security tags. It returns nil when tracing is disabled.
+func buildTracingConfig(settings TracingSettings) *hcm.HttpConnectionManager_Tracing {
+	if !settings.Enabled {
+		return nil
+	}
+	customTags := []*tracingv3.CustomTag{
+		buildMetadataTag("security_rule.name", "envoy.filters.http.rbac", "shadow_effective_policy_id"),
+		buildMetadataTag("peer.spiffe.id", "envoy.filters.http.rbac", "principal"),
+		buildMetadataTag("security_rule.implicit", constants.ObservabilityMetadataNamespace, "security_rule.implicit"),
+		buildMetadataTag("event.action", constants.ObservabilityMetadataNamespace, "event.action"),
+		buildMetadataTag("event.outcome", constants.ObservabilityMetadataNamespace, "event.outcome"),
+		buildMetadataTag("event.kind", constants.ObservabilityMetadataNamespace, "event.kind"),
+		buildMetadataTag("event.category", constants.ObservabilityMetadataNamespace, "event.category"),
+		buildMetadataTag("mcp.method.name", constants.ObservabilityMetadataNamespace, "mcp.method.name"),
+		buildMetadataTag("component", constants.ObservabilityMetadataNamespace, "component"),
+	}
+	customTags = append(customTags, settings.CustomTags...)
+
 	return &hcm.HttpConnectionManager_Tracing{
-		RandomSampling:    &typev3.Percent{Value: sampleRate},
-		ClientSampling:    &typev3.Percent{Value: 100.0}, // always honor incoming sampled traceparent to preserve agent-to-gateway trace linkage
-		OverallSampling:   &typev3.Percent{Value: sampleRate},
+		RandomSampling:    &typev3.Percent{Value: settings.SamplingPercent},
+		ClientSampling:    &typev3.Percent{Value: settings.ClientSamplingPercent}, // honors incoming sampled traceparent to preserve agent-to-gateway trace linkage
+		OverallSampling:   &typev3.Percent{Value: settings.SamplingPercent},
 		SpawnUpstreamSpan: wrapperspb.Bool(true),
-		CustomTags: []*tracingv3.CustomTag{
-			buildMetadataTag("security_rule.name", "envoy.filters.http.rbac", "shadow_effective_policy_id"),
-			buildMetadataTag("peer.spiffe.id", "envoy.filters.http.rbac", "principal"),
-			buildMetadataTag("security_rule.implicit", constants.ObservabilityMetadataNamespace, "security_rule.implicit"),
-			buildMetadataTag("event.action", constants.ObservabilityMetadataNamespace, "event.action"),
-			buildMetadataTag("event.outcome", constants.ObservabilityMetadataNamespace, "event.outcome"),
-			buildMetadataTag("event.kind", constants.ObservabilityMetadataNamespace, "event.kind"),
-			buildMetadataTag("event.category", constants.ObservabilityMetadataNamespace, "event.category"),
-			buildMetadataTag("mcp.method.name", constants.ObservabilityMetadataNamespace, "mcp.method.name"),
-			buildMetadataTag("component", constants.ObservabilityMetadataNamespace, "component"),
-		},
+		CustomTags:        customTags,
 	}
 }
 

@@ -58,7 +58,7 @@ var (
 	shardingPodUID          = flag.String("sharding-pod-uid", "", "(Work Sharding) The pod UID of the controller")
 	shardingApplicationName = flag.String("sharding-application-name", "", "(Work Sharding) The application name to disambiguate Leases")
 
-	tracingSampleRate = flag.Float64("tracing-sampling-rate", 100.0, "Percentage of requests to sample for tracing (0.0-100.0)")
+	tracingSampleRate = flag.Float64("tracing-sampling-rate", 100.0, "Implementation-default percentage of requests to sample for tracing (0.0-100.0), used when no XTelemetryPolicy targets the Gateway or its mode is ImplementationDefault")
 
 	enableAgenticIdentitySigner = flag.Bool("enable-agentic-identity-signer", false, fmt.Sprintf("Run controller for %s", agenticidentitysigner.Name))
 	agenticIdentityTrustDomain  = flag.String("agentic-identity-trust-domain", "", "The SPIFFE trust domain for issued certificates")
@@ -135,7 +135,8 @@ func main() {
 		sharedGwInformers.Gateway().V1().HTTPRoutes(),
 		sharedGwInformers.Gateway().V1beta1().ReferenceGrants(),
 		sharedAgenticInformers.Agentic().V0alpha0().XBackends(),
-		sharedAgenticInformers.Agentic().V1alpha1().XAccessPolicies())
+		sharedAgenticInformers.Agentic().V1alpha1().XAccessPolicies(),
+		sharedGwInformers.Experimental().V1alpha1().XTelemetryPolicies())
 	if err != nil {
 		klog.ErrorS(err, "Error while creating agentic networking controller")
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)

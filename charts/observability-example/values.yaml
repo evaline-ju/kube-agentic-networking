@@ -42,3 +42,23 @@ grafana:
       cpu: 100m
   adminUser: admin
   adminPassword: admin
+
+# XTelemetryPolicy enabling OTel tracing on the quickstart Gateway, exporting
+# to this chart's otel-collector. Requires the Gateway API experimental
+# channel CRDs (gateway.networking.x-k8s.io).
+telemetryPolicy:
+  enabled: true
+  # Name of the XTelemetryPolicy (defaults to agentic-net-gateway-tracing).
+  name: ""
+  # Gateway in the release namespace that the policy targets.
+  gatewayName: agentic-net-gateway
+  # Sampling rate numerator (percent). Defaults to the implementation default
+  # (controller --tracing-sampling-rate flag) when unset.
+  samplingRate: 100
+  # Optional service.name for exported spans.
+  serviceName: ""
+  # Optional custom span attributes, e.g.
+  #   - name: agent-id
+  #     sourceType: Header
+  #     headerName: x-agent-id
+  attributes: []

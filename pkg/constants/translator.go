@@ -67,4 +67,17 @@ const (
 	// SpiffeIDFormat is the standard SPIFFE ID format for Kubernetes workloads.
 	// Format: spiffe://<trust-domain>/ns/<namespace>/sa/<service-account>
 	SpiffeIDFormat = "spiffe://%s/ns/%s/sa/%s"
+
+	// DefaultOTelCollectorPort is the default OTLP gRPC port used when an
+	// XTelemetryPolicy provider backendRef does not specify a port.
+	DefaultOTelCollectorPort = 4317
+
+	// OtelCollectorClusterName is the Envoy cluster name for the OTLP trace
+	// collector referenced by the bootstrap OTel tracer.
+	OtelCollectorClusterName = "otel_collector"
+
+	// EnvoyConfigChecksumAnnotation is set on the Envoy proxy pod template with
+	// a sha256 digest of the rendered bootstrap config; a change rolls the pods
+	// so static bootstrap updates (e.g. tracing config) take effect.
+	EnvoyConfigChecksumAnnotation = "agentic-net.io/config-checksum"
 )

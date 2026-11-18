@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -43,11 +44,27 @@ type ResourceManager struct {
 	envoyImage                 string
 	namespace                  string
 	agenticIdentityTrustDomain string
+	telemetry                  TelemetryOptions
+}
+
+// TelemetryOptions carries the telemetry configuration rendered into the Envoy
+// bootstrap: whether the OTel tracer is enabled, its service name, and the OTLP
+// collector destination. Resolved from the XTelemetryPolicy targeting the
+// Gateway (or implementation defaults when no policy exists).
+type TelemetryOptions struct {
+	// TracingEnabled controls whether the bootstrap includes the OTel tracer.
+	TracingEnabled bool
+	// ServiceName is the service.name resource attribute on exported spans.
+	ServiceName string
+	// CollectorAddress is the OTLP collector cluster address (Service FQDN).
+	CollectorAddress string
+	// CollectorPort is the OTLP collector gRPC port.
+	CollectorPort int
 }
 
 // NewResourceManager creates a new ResourceManager.
 // The nodeID is generated based on the Gateway's namespace and name and is not exposed to the controller.
-func NewResourceManager(client kubernetes.Interface, gw *gatewayv1.Gateway, envoyImage string, agenticIdentityTrustDomain string) *ResourceManager {
+func NewResourceManager(client kubernetes.Interface, gw *gatewayv1.Gateway, envoyImage string, agenticIdentityTrustDomain string, telemetry TelemetryOptions) *ResourceManager {
 	return &ResourceManager{
 		client:                     client,
 		gw:                         gw,
@@ -55,6 +72,7 @@ func NewResourceManager(client kubernetes.Interface, gw *gatewayv1.Gateway, envo
 		envoyImage:                 envoyImage,
 		namespace:                  gw.Namespace,
 		agenticIdentityTrustDomain: agenticIdentityTrustDomain,
+		telemetry:                  telemetry,
 	}
 }
 
@@ -130,7 +148,7 @@ func (r *ResourceManager) ensureConfigMap(ctx context.Context) error {
 		return err
 	}
 
-	_, err = r.client.CoreV1().ConfigMaps(cm.Namespace).Get(ctx, cm.Name, metav1.GetOptions{})
+	existing, err := r.client.CoreV1().ConfigMaps(cm.Namespace).Get(ctx, cm.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("Creating Envoy bootstrap configmap", "name", cm.Name, "namespace", cm.Namespace)
@@ -140,6 +158,16 @@ func (r *ResourceManager) ensureConfigMap(ctx context.Context) error {
 			}
 		} else {
 			return fmt.Errorf("failed to get envoy configmap: %w", err)
+		}
+	} else if !reflect.DeepEqual(existing.Data, cm.Data) {
+		// Bootstrap changes (e.g. tracing toggled or collector address changed
+		// via XTelemetryPolicy) are only picked up on Envoy restart: update the
+		// ConfigMap so the deployment checksum annotation rolls the pods.
+		logger.Info("Updating Envoy bootstrap configmap", "name", cm.Name, "namespace", cm.Namespace)
+		existing = existing.DeepCopy()
+		existing.Data = cm.Data
+		if _, err := r.client.CoreV1().ConfigMaps(cm.Namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("failed to update envoy configmap: %w", err)
 		}
 	}
 
@@ -163,6 +191,19 @@ func (r *ResourceManager) ensureDeployment(ctx context.Context) error {
 		} else {
 			return fmt.Errorf("failed to get envoy deployment: %w", err)
 		}
+	} else if dep.Spec.Template.Annotations[constants.EnvoyConfigChecksumAnnotation] != deployment.Spec.Template.Annotations[constants.EnvoyConfigChecksumAnnotation] {
+		// The bootstrap config checksum changed (e.g. tracing toggled or collector
+		// address changed via XTelemetryPolicy): roll the pods to pick up the new
+		// static bootstrap. Only the checksum is compared (not the whole pod
+		// template) so API-server defaulting doesn't cause endless rollouts.
+		logger.Info("Updating Envoy proxy deployment", "name", deployment.Name, "namespace", deployment.Namespace)
+		dep = dep.DeepCopy()
+		dep.Spec.Template = deployment.Spec.Template
+		if _, err := r.client.AppsV1().Deployments(dep.Namespace).Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("failed to update envoy deployment: %w", err)
+		}
+		// The update just rolled the pods; wait for the next reconcile to see them available.
+		return fmt.Errorf("envoy deployment %s update rolled out, not available yet", deployment.Name)
 	}
 
 	// If the Deployment was just created, we will highly likely immediately fail

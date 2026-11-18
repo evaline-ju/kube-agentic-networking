@@ -18,7 +18,9 @@ package envoy
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"text/template"
@@ -55,6 +57,8 @@ type bootstrapConfigData struct {
 	ID                   string
 	ControlPlaneAddress  string
 	ControlPlanePort     int
+	TracingEnabled       bool
+	ServiceName          string
 	OtelCollectorAddress string
 	OtelCollectorPort    int
 }
@@ -67,7 +71,7 @@ type sdsConfigData struct {
 }
 
 // generateEnvoyBootstrapConfig returns an envoy config generated from config data
-func generateEnvoyBootstrapConfig(cluster, id, namespace string) (string, error) {
+func generateEnvoyBootstrapConfig(cluster, id, namespace string, telemetry TelemetryOptions) (string, error) {
 	if cluster == "" || id == "" {
 		return "", fmt.Errorf("missing parameters for envoy config")
 	}
@@ -77,8 +81,10 @@ func generateEnvoyBootstrapConfig(cluster, id, namespace string) (string, error)
 		ID:                   id,
 		ControlPlaneAddress:  fmt.Sprintf("%s.%s.svc.cluster.local", constants.XDSServerServiceName, constants.AgenticNetSystemNamespace),
 		ControlPlanePort:     15001,
-		OtelCollectorAddress: fmt.Sprintf("otel-collector.%s.svc.cluster.local", namespace),
-		OtelCollectorPort:    4317,
+		TracingEnabled:       telemetry.TracingEnabled,
+		ServiceName:          telemetry.ServiceName,
+		OtelCollectorAddress: telemetry.CollectorAddress,
+		OtelCollectorPort:    telemetry.CollectorPort,
 	}
 
 	t, err := template.New("gateway-config").Parse(bootstrapTemplate)
@@ -141,7 +147,7 @@ func (r *ResourceManager) renderConfigMap() (*corev1.ConfigMap, error) {
 	bootstrap, err := generateEnvoyBootstrapConfig(types.NamespacedName{
 		Namespace: r.gw.Namespace,
 		Name:      r.gw.Name,
-	}.String(), r.nodeID, r.gw.Namespace)
+	}.String(), r.nodeID, r.gw.Namespace, r.telemetry)
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +184,15 @@ func (r *ResourceManager) renderDeployment() *appsv1.Deployment {
 		infraAnnotations = r.gw.Spec.Infrastructure.Annotations
 		infraLabels = r.gw.Spec.Infrastructure.Labels
 	}
+	// The Envoy bootstrap config is static: changes to it (e.g. tracing
+	// enabled/disabled or a new OTLP collector address from an XTelemetryPolicy)
+	// only take effect on pod restart. The checksum annotation rolls the pods
+	// whenever the rendered config changes.
+	configChecksum := r.configChecksum()
+	podAnnotations := getAnnotations(infraAnnotations)
+	if configChecksum != "" {
+		podAnnotations[constants.EnvoyConfigChecksumAnnotation] = configChecksum
+	}
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            r.nodeID,
@@ -200,7 +215,7 @@ func (r *ResourceManager) renderDeployment() *appsv1.Deployment {
 						l["app"] = r.nodeID
 						return l
 					}(),
-					Annotations: getAnnotations(infraAnnotations),
+					Annotations: podAnnotations,
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: r.nodeID,
@@ -369,6 +384,22 @@ func (r *ResourceManager) renderServiceAccount() *corev1.ServiceAccount {
 			OwnerReferences: ownerRef(r.gw),
 		},
 	}
+}
+
+// configChecksum returns a sha256 hex digest of the rendered ConfigMap data, or
+// an empty string if rendering fails (in which case no checksum annotation is
+// applied and the existing deployment is left alone).
+func (r *ResourceManager) configChecksum() string {
+	cm, err := r.renderConfigMap()
+	if err != nil {
+		return ""
+	}
+	hasher := sha256.New()
+	for _, key := range []string{constants.EnvoyBootstrapCfgFileName, constants.SpiffeIdentitySdsFileName, constants.SpiffeTrustSdsFileName} {
+		hasher.Write([]byte(key))
+		hasher.Write([]byte(cm.Data[key]))
+	}
+	return hex.EncodeToString(hasher.Sum(nil))
 }
 
 func ownerRef(gw *gatewayv1.Gateway) []metav1.OwnerReference {

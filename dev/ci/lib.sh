@@ -207,7 +207,8 @@ build_and_load_mcp_everything_image() {
 # Function to install CRDs
 install_crds() {
   header "Installing Gateway API CRDs"
-  kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
+  # Experimental channel is required for XTelemetryPolicy (gateway.networking.x-k8s.io).
+  kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.7.0/experimental-install.yaml
 
   header "Installing Project CRDs"
   for file in k8s/crds/agentic.networking.x-k8s.io_*.yaml; do

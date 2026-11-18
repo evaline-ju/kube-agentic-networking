@@ -35,6 +35,7 @@ import (
 	gatewayfake "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned/fake"
 	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 	gatewaylistersv1beta1 "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1beta1"
+	gatewaylistersxv1alpha1 "sigs.k8s.io/gateway-api/pkg/client/listers/apisx/v1alpha1"
 
 	agenticv0alpha0 "sigs.k8s.io/kube-agentic-networking/api/v0alpha0"
 	agenticv1alpha1 "sigs.k8s.io/kube-agentic-networking/api/v1alpha1"
@@ -413,6 +414,28 @@ func TestSyncGateway_EnsureProxyExistError(t *testing.T) {
 
 	fakeGwClient := gatewayfake.NewClientset(gw)
 
+	emptyIndexer := func() cache.Indexer {
+		return cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	}
+
+	trans := translator.New(
+		"test-trust-domain",
+		fakeK8sClient,
+		fakeGwClient,
+		corev1listers.NewNamespaceLister(emptyIndexer()),
+		corev1listers.NewServiceLister(emptyIndexer()),
+		discoverylisters.NewEndpointSliceLister(emptyIndexer()),
+		corev1listers.NewSecretLister(emptyIndexer()),
+		corev1listers.NewConfigMapLister(emptyIndexer()),
+		gatewaylisters.NewGatewayLister(gwIndexer),
+		gatewaylisters.NewHTTPRouteLister(emptyIndexer()),
+		gatewaylistersv1beta1.NewReferenceGrantLister(emptyIndexer()),
+		agenticlistersv1alpha1.NewXAccessPolicyLister(emptyIndexer()),
+		agenticlisters.NewXBackendLister(emptyIndexer()),
+		gatewaylistersxv1alpha1.NewXTelemetryPolicyLister(emptyIndexer()),
+		0.0,
+	)
+
 	queue := &fakeQueue{}
 
 	c := &Controller{
@@ -425,6 +448,7 @@ func TestSyncGateway_EnsureProxyExistError(t *testing.T) {
 			client: fakeK8sClient,
 		},
 		gatewayqueue: queue,
+		translator:  trans,
 	}
 
 	err := c.syncGateway(context.Background(), gwNamespace+"/"+gwName)
@@ -526,6 +550,7 @@ func TestSyncGateway_EnsureProxyExistError_HTTPRouteStatusUpdated(t *testing.T) 
 		gatewaylistersv1beta1.NewReferenceGrantLister(emptyIndexer()),
 		agenticlistersv1alpha1.NewXAccessPolicyLister(emptyIndexer()),
 		agenticlisters.NewXBackendLister(emptyIndexer()),
+		gatewaylistersxv1alpha1.NewXTelemetryPolicyLister(emptyIndexer()),
 		0.0,
 	)
 

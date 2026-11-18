@@ -19,6 +19,74 @@ kind: Namespace
 metadata:
   name: gateway-conformance-app-backend
 ---
+# The gateway-api conformance suite (v1.7.0) requires at least one ready Pod in
+# each of the gateway-conformance-infra, gateway-conformance-app-backend and
+# gateway-conformance-web-backend namespaces during base setup, even though this
+# implementation keeps its own resources in agentic-conformance-infra. Deploy
+# minimal sleep pods there to satisfy NamespacesMustBeReady.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conformance-ns-keeper
+  namespace: gateway-conformance-infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: conformance-ns-keeper
+  template:
+    metadata:
+      labels:
+        app: conformance-ns-keeper
+    spec:
+      containers:
+      - name: keeper
+        image: curlimages/curl:latest
+        imagePullPolicy: IfNotPresent
+        command: ["sleep", "infinity"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conformance-ns-keeper
+  namespace: gateway-conformance-app-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: conformance-ns-keeper
+  template:
+    metadata:
+      labels:
+        app: conformance-ns-keeper
+    spec:
+      containers:
+      - name: keeper
+        image: curlimages/curl:latest
+        imagePullPolicy: IfNotPresent
+        command: ["sleep", "infinity"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conformance-ns-keeper
+  namespace: gateway-conformance-web-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: conformance-ns-keeper
+  template:
+    metadata:
+      labels:
+        app: conformance-ns-keeper
+    spec:
+      containers:
+      - name: keeper
+        image: curlimages/curl:latest
+        imagePullPolicy: IfNotPresent
+        command: ["sleep", "infinity"]
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:

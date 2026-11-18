@@ -36,7 +36,7 @@ func TestRenderConfigMap(t *testing.T) {
 			Namespace: "test-ns",
 		},
 	}
-	rm := NewResourceManager(nil, gw, "envoy-image", "cluster.local")
+	rm := NewResourceManager(nil, gw, "envoy-image", "cluster.local", TelemetryOptions{})
 
 	cm, err := rm.renderConfigMap()
 	if err != nil {
@@ -77,7 +77,7 @@ func TestRenderDeployment(t *testing.T) {
 		},
 	}
 	trustDomain := "test.cluster"
-	rm := NewResourceManager(nil, gw, "envoy-image", trustDomain)
+	rm := NewResourceManager(nil, gw, "envoy-image", trustDomain, TelemetryOptions{})
 
 	dep := rm.renderDeployment()
 
@@ -230,7 +230,7 @@ func TestRenderService(t *testing.T) {
 					Listeners: tc.listeners,
 				},
 			}
-			rm := NewResourceManager(nil, gw, "envoy-image", "cluster.local")
+			rm := NewResourceManager(nil, gw, "envoy-image", "cluster.local", TelemetryOptions{})
 
 			svc := rm.renderService()
 
@@ -259,7 +259,7 @@ func TestRenderServiceAccount(t *testing.T) {
 			Namespace: "test-ns",
 		},
 	}
-	rm := NewResourceManager(nil, gw, "envoy-image", "cluster.local")
+	rm := NewResourceManager(nil, gw, "envoy-image", "cluster.local", TelemetryOptions{})
 
 	sa := rm.renderServiceAccount()
 
@@ -285,7 +285,7 @@ func TestRenderWithInfrastructureLabelsAndAnnotations(t *testing.T) {
 			},
 		},
 	}
-	rm := NewResourceManager(nil, gw, "envoy-image", "cluster.local")
+	rm := NewResourceManager(nil, gw, "envoy-image", "cluster.local", TelemetryOptions{})
 
 	// Test Deployment
 	dep := rm.renderDeployment()

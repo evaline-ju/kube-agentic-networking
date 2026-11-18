@@ -38,7 +38,7 @@ func TestEnsureDeployment(t *testing.T) {
 
 	t.Run("deployment not found, creates and returns error (not ready)", func(t *testing.T) {
 		client := fake.NewClientset()
-		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local")
+		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
 
 		err := rm.ensureDeployment(context.Background())
 		if err == nil {
@@ -68,7 +68,7 @@ func TestEnsureDeployment(t *testing.T) {
 			},
 		}
 		client := fake.NewClientset(dep)
-		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local")
+		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
 
 		err := rm.ensureDeployment(context.Background())
 		if err == nil {
@@ -77,22 +77,18 @@ func TestEnsureDeployment(t *testing.T) {
 	})
 
 	t.Run("deployment exists and available, returns nil", func(t *testing.T) {
-		dep := &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      nodeID,
-				Namespace: "test-ns",
-			},
-			Status: appsv1.DeploymentStatus{
-				Conditions: []appsv1.DeploymentCondition{
-					{
-						Type:   appsv1.DeploymentAvailable,
-						Status: corev1.ConditionTrue,
-					},
-				},
+		// Render the expected deployment first (rendering never touches the
+		// client), then seed a client with it marked available.
+		renderRM := NewResourceManager(fake.NewClientset(), gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
+		dep := renderRM.renderDeployment()
+		dep.Status.Conditions = []appsv1.DeploymentCondition{
+			{
+				Type:   appsv1.DeploymentAvailable,
+				Status: corev1.ConditionTrue,
 			},
 		}
 		client := fake.NewClientset(dep)
-		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local")
+		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
 
 		err := rm.ensureDeployment(context.Background())
 		if err != nil {
@@ -112,7 +108,7 @@ func TestEnsureService(t *testing.T) {
 
 	t.Run("service not found, creates and returns error (no LoadBalancer address)", func(t *testing.T) {
 		client := fake.NewClientset()
-		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local")
+		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
 
 		_, err := rm.ensureService(context.Background())
 		if err == nil {
@@ -137,7 +133,7 @@ func TestEnsureService(t *testing.T) {
 			},
 		}
 		client := fake.NewClientset(svc)
-		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local")
+		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
 
 		_, err := rm.ensureService(context.Background())
 		if err == nil {
@@ -156,7 +152,7 @@ func TestEnsureService(t *testing.T) {
 			},
 		}
 		client := fake.NewClientset(svc)
-		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local")
+		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
 
 		_, err := rm.ensureService(context.Background())
 		if err == nil {
@@ -193,7 +189,7 @@ func TestEnsureService(t *testing.T) {
 			},
 		}
 		client := fake.NewClientset(svc)
-		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local")
+		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
 
 		ip, err := rm.ensureService(context.Background())
 		if err != nil {
@@ -222,7 +218,7 @@ func TestEnsureService(t *testing.T) {
 			},
 		}
 		client := fake.NewClientset(svc)
-		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local")
+		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
 
 		address, err := rm.ensureService(context.Background())
 		if err != nil {
@@ -245,7 +241,7 @@ func TestEnsureServiceExists(t *testing.T) {
 
 	t.Run("service not found, creates and returns service", func(t *testing.T) {
 		client := fake.NewClientset()
-		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local")
+		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
 
 		svc, err := rm.ensureServiceExists(context.Background())
 		if err != nil {
@@ -273,7 +269,7 @@ func TestEnsureServiceExists(t *testing.T) {
 			},
 		}
 		client := fake.NewClientset(existingSvc)
-		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local")
+		rm := NewResourceManager(client, gw, "envoy-image", "cluster.local", TelemetryOptions{TracingEnabled: true, ServiceName: "test-gateway", CollectorAddress: "otel-collector.test-ns.svc.cluster.local", CollectorPort: 4317})
 
 		svc, err := rm.ensureServiceExists(context.Background())
 		if err != nil {

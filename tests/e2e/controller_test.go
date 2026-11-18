@@ -1322,7 +1322,7 @@ func getClientset(t *testing.T) kubernetes.Interface {
 
 func writePodFile(t *testing.T, namespace, podName, filePath string, content []byte) {
 	// #nosec G204
-	cmd := exec.CommandContext(context.Background(), "kubectl", "exec", "-i", podName, "-n", namespace, "--", "sh", "-c", "cat > "+filePath)
+	cmd := exec.CommandContext(context.Background(), "kubectl", "exec", "-i", podName, "-n", namespace, "--", "sh", "-c", "mkdir -p "+filepath.Dir(filePath)+" && cat > "+filePath)
 	cmd.Stdin = bytes.NewReader(content)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"io/fs"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,7 +34,6 @@ import (
 	confflags "sigs.k8s.io/gateway-api/conformance/utils/flags"
 	"sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	confsuite "sigs.k8s.io/gateway-api/conformance/utils/suite"
-	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/kube-agentic-networking/api/v0alpha0"
 	"sigs.k8s.io/kube-agentic-networking/api/v1alpha1"
@@ -71,60 +69,35 @@ func DefaultOptions(t *testing.T) confsuite.ConformanceOptions {
 	cs, err := clientset.NewForConfig(cfg)
 	require.NoError(t, err, "error initializing Kubernetes clientset")
 
-	exemptFeatures := confsuite.ParseSupportedFeatures(*confflags.ExemptFeatures)
-	skipTests := confsuite.ParseSkipTests(*confflags.SkipTests)
-	namespaceLabels := confsuite.ParseKeyValuePairs(*confflags.NamespaceLabels)
-	namespaceAnnotations := confsuite.ParseKeyValuePairs(*confflags.NamespaceAnnotations)
-
-	conformanceProfiles := sets.New(GatewayLayerProfileName)
-
-	implementation := confsuite.ParseImplementation(
-		*confflags.ImplementationOrganization,
-		*confflags.ImplementationProject,
-		*confflags.ImplementationURL,
-		*confflags.ImplementationVersion,
-		*confflags.ImplementationContact,
-	)
-
 	supportedFeaturesSet := sets.New(features.AgenticCoreFeatures.UnsortedList()...)
-	if *confflags.SupportedFeatures != "" {
-		for _, f := range strings.Split(*confflags.SupportedFeatures, ",") {
-			supportedFeaturesSet.Insert(gatewayfeatures.FeatureName(strings.TrimSpace(f)))
-		}
-	}
 
 	opts := confsuite.ConformanceOptions{
-		Client:               c,
-		ClientOptions:        clientOptions,
-		Clientset:            cs,
-		RestConfig:           cfg,
-		GatewayClassName:     *confflags.GatewayClassName,
-		BaseManifests:        "resources/base.yaml.tmpl",
-		Debug:                *confflags.ShowDebug,
-		CleanupBaseResources: *confflags.CleanupBaseResources,
-		SupportedFeatures:    supportedFeaturesSet,
-		SkipTests:            skipTests,
-		ExemptFeatures:       exemptFeatures,
-		RunTest:              *confflags.RunTest,
-		Mode:                 *confflags.Mode,
-		Implementation:       implementation,
-		ConformanceProfiles:  conformanceProfiles,
-		ManifestFS:           []fs.FS{&Manifests},
-		ReportOutputPath:     *confflags.ReportOutput,
-		SkipProvisionalTests: *confflags.SkipProvisionalTests,
-		AllowCRDsMismatch:    true,
-		NamespaceLabels:      namespaceLabels,
-		NamespaceAnnotations: namespaceAnnotations,
+		Client:        c,
+		ClientOptions: clientOptions,
+		Clientset:     cs,
+		RestConfig:    cfg,
+		BaseManifests: "resources/base.yaml.tmpl",
+		ManifestFS:    []fs.FS{&Manifests},
 	}
+	opts.GatewayClassName = confflags.DefaultGatewayClassName
+	opts.Mode = confflags.DefaultMode
+	opts.CleanupBaseResources = confflags.DefaultCleanupBaseResources
+	opts.CleanupTestResources = confflags.DefaultCleanupTestResources
+	opts.ConformanceProfiles = []confsuite.ConformanceProfileName{GatewayLayerProfileName}
 
-	// Remove any features explicitly exempted via flags.
-	if opts.ExemptFeatures.Len() > 0 {
-		var toDelete []gatewayfeatures.FeatureName
-		for _, f := range opts.ExemptFeatures.UnsortedList() {
-			toDelete = append(toDelete, f)
-		}
-		opts.SupportedFeatures = opts.SupportedFeatures.Delete(toDelete...)
+	// Apply command-line flags (e.g. --gateway-class) over the defaults; only
+	// explicitly set flags are applied.
+	confflags.ApplyAll(&opts.ConfigurableOptions)
+
+	// Flag-provided supported features extend the implementation's core set.
+	for _, f := range opts.SupportedFeatures {
+		supportedFeaturesSet.Insert(f)
 	}
+	// Remove any features explicitly exempted via flags.
+	if len(opts.ExemptFeatures) > 0 {
+		supportedFeaturesSet.Delete(opts.ExemptFeatures...)
+	}
+	opts.SupportedFeatures = supportedFeaturesSet.UnsortedList()
 
 	return opts
 }

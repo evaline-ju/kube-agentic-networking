@@ -8,4 +8,5 @@ spec:
   containers:
   - name: tester
     image: curlimages/curl:latest
+    imagePullPolicy: IfNotPresent
     command: ["sleep", "infinity"]
